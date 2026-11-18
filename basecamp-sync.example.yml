@@ -1,0 +1,12 @@
+# Paths are relative to this file. Use the Git repository root.
+repository: .
+account: "123456"
+project: "789012"
+# profile: human
+# vault: "345678"
+include:
+  - "*.md"
+  - "**/*.md"
+exclude:
+  - "private/**"
+state: .basecamp-md-sync-state.json

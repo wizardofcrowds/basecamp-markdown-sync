@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+.gems/
+.bundle/
+vendor/bundle/
+*.gem
+.basecamp-md-sync-state.json*
