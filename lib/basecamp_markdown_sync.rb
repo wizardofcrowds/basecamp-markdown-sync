@@ -22,6 +22,18 @@ module BasecampMarkdownSync
     out
   end
 
+  # Basecamp URL for a synced item, keeping a heading fragment when given.
+  def self.link_url(entries, target, fragment)
+    url = entries.fetch(target).fetch("url")
+    fragment.nil? || fragment.empty? ? url : "#{url}##{fragment}"
+  end
+
+  # GitHub-style heading slug: lowercase, punctuation removed except hyphens
+  # and underscores, spaces become hyphens.
+  def self.slug(text)
+    text.downcase.gsub(/[^\p{L}\p{M}\p{N}\p{Pc} -]/u, "").tr(" ", "-")
+  end
+
   def self.save_state(path, state)
     FileUtils.mkdir_p(path.dirname)
     Tempfile.create([path.basename.to_s, ".tmp"], path.dirname.to_s) do |file|
@@ -85,11 +97,18 @@ module BasecampMarkdownSync
       # than silently publish broken href/src attributes.
       if [:html_element, :xml_comment, :xml_pi, :doctype, :raw].include?(node.type)
         # GFM creates del elements for strikethrough; these have parsed children.
-        unless node.type == :html_element && node.value == "del" && !node.children.empty?
+        unless (node.type == :html_element && node.value == "del" && !node.children.empty?) || task_checkbox?(node)
           raise Error, "Raw HTML is unsupported; use Markdown links and images instead"
         end
       end
       descendants(node).each { |child| reject_source_html(child) }
+    end
+
+    # GFM task lists ("- [ ]") produce disabled checkbox inputs. They carry no
+    # links, and Basecamp cannot show form inputs, so they render as text.
+    def task_checkbox?(node)
+      node.type == :html_element && node.value == "input" && node.children.empty? &&
+        node.attr["type"] == "checkbox" && node.attr["class"].to_s.split.include?("task-list-item-checkbox")
     end
 
     def descendants(node)
@@ -113,15 +132,44 @@ module BasecampMarkdownSync
       originals = enum_for(:links, @document.root).map { |node, _| node }
       copies = enum_for(:links, document.root).map { |node, _| node }
       originals.zip(copies) do |original, copy|
-        copy.options.merge!(original.options.slice(:sync_target, :sync_unlink))
+        copy.options.merge!(original.options.slice(:sync_target, :sync_fragment, :sync_unlink))
       end
+      anchor_headings(document.root)
       transform(document.root, entries)
       document.to_html
     end
 
+    # Basecamp strips id attributes but keeps <a name>, so each heading gets a
+    # named anchor matching the GitHub slug that repository links use.
+    def anchor_headings(root)
+      seen = Hash.new(0)
+      headers = []
+      collect = lambda do |node|
+        headers << node if node.type == :header
+        descendants(node).each { |child| collect.call(child) if child.is_a?(Kramdown::Element) }
+      end
+      collect.call(root)
+      headers.each do |header|
+        base = BasecampMarkdownSync.slug(heading_text(header))
+        name = seen[base].zero? ? base : "#{base}-#{seen[base]}"
+        seen[base] += 1
+        next if name.empty?
+        header.children.unshift(Kramdown::Element.new(:html_element, "a", { "name" => name }, category: :span))
+      end
+    end
+
+    def heading_text(node)
+      case node.type
+      when :text, :codespan then node.value.to_s
+      when :smart_quote then "'"
+      when :entity then node.value.char.to_s
+      else node.children.map { |child| heading_text(child) }.join
+      end
+    end
+
     def transform(node, entries)
       if (target = node.options[:sync_target])
-        url = entries.fetch(target).fetch("url")
+        url = BasecampMarkdownSync.link_url(entries, target, node.options[:sync_fragment])
         if node.type == :img
           label = node.attr["alt"].to_s
           label = target if label.empty?
@@ -133,7 +181,15 @@ module BasecampMarkdownSync
           node.attr["href"] = url
         end
       end
-      node.children = node.children.flat_map { |child| child.options[:sync_unlink] ? unlinked(child) : [child] }
+      node.children = node.children.flat_map do |child|
+        if task_checkbox?(child)
+          [Kramdown::Element.new(:text, child.attr.key?("checked") ? "\u2611 " : "\u2610 ")]
+        elsif child.options[:sync_unlink]
+          unlinked(child)
+        else
+          [child]
+        end
+      end
       descendants(node).each { |child| transform(child, entries) }
     end
 
@@ -188,12 +244,11 @@ module BasecampMarkdownSync
 
     def target(source, url)
       return nil if url.match?(/\A[a-z][a-z0-9+.-]*:/i) || url.start_with?("//")
-      path, suffix = url.split(/[?#]/, 2)
-      if path.nil? || path.empty?
-        return nil unless url.start_with?("#")
-        @warnings << "#{source}: heading link #{url.inspect} points to the document; Basecamp anchors are unsupported"
-        return source
-      end
+      path = url.split(/[?#]/, 2).first
+      query = url.split("#", 2).first.include?("?")
+      return nil if (path.nil? || path.empty?) && !url.start_with?("#")
+      @warnings << "#{source}: query removed from local link #{url.inspect}" if query
+      return source if path.nil? || path.empty?
       decoded = URI::DEFAULT_PARSER.unescape(path).force_encoding(Encoding::UTF_8)
       base = decoded.start_with?("/") ? @root : (@root / source).dirname
       file = (base / decoded.sub(%r{\A/+}, "")).cleanpath
@@ -206,7 +261,6 @@ module BasecampMarkdownSync
         read(relative)
         @assets << relative
       end
-      @warnings << "#{source}: query/fragment removed from local link #{url.inspect}" unless suffix.nil?
       relative
     end
 
@@ -226,7 +280,10 @@ module BasecampMarkdownSync
           raise Error, "Markdown must be UTF-8" unless source.valid_encoding?
           document = @parser.new(source)
           document.links do |node, attribute|
-            target = target(path, node.attr.fetch(attribute))
+            href = node.attr.fetch(attribute)
+            target = target(path, href)
+            fragment = href.split("#", 2)[1]
+            node.options[:sync_fragment] = URI::DEFAULT_PARSER.unescape(fragment) if target && fragment && !fragment.empty?
             if target && @docs.include?(target) && !queued.include?(target) && !entries.key?(target)
               if @declined.include?(target) || !decide.call(path, target)
                 @declined << target
@@ -259,7 +316,7 @@ module BasecampMarkdownSync
         save.call
         result = @cli.create(path, markdown: @docs.include?(path))
         url = result["app_url"]
-        unless result["id"] && url && URI.parse(url).host == "3.basecamp.com" && URI.parse(url).scheme == "https"
+        unless result["id"] && url && %w[3.basecamp.com app.basecamp.com].include?(URI.parse(url).host) && URI.parse(url).scheme == "https"
           raise Error, "Create returned no usable ID/app_url for #{path}; inspect Basecamp before retrying"
         end
         entries[path] = { "id" => result["id"], "url" => url }

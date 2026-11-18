@@ -71,7 +71,7 @@ class ASTFixture
   def render(entries)
     JSON.generate([@data["text"], @nodes.map do |node|
       next "(unlinked)" if node.options[:sync_unlink]
-      node.options[:sync_target] ? entries.fetch(node.options[:sync_target]).fetch("url") : node.attr["href"]
+      node.options[:sync_target] ? Sync.link_url(entries, node.options[:sync_target], node.options[:sync_fragment]) : node.attr["href"]
     end])
   end
 end
@@ -228,16 +228,23 @@ test("path and symlink escapes fail") do
   end
 end
 
-test("fragments warn and resolve to documents; external links stay intact") do
+test("fragments are kept, queries warn; external links stay intact") do
   repository do |root, state, cli|
-    document(root, "a.md", ["b.md?raw=1#heading", "#self", "https://example.org/a.md", "mailto:a@example.org"])
+    document(root, "a.md", ["b.md?raw=1#heading", "#self", "b.md#two-words", "https://example.org/a.md", "mailto:a@example.org"])
     document(root, "b.md")
     publisher = engine(root, state, cli)
-    equal(2, publisher.warnings.size)
+    equal(1, publisher.warnings.size)
     publish(publisher, root, state)
     content = JSON.parse(cli.updated.first.last)
-    equal([state["entries"]["b.md"]["url"], state["entries"]["a.md"]["url"], "https://example.org/a.md", "mailto:a@example.org"], content.last)
+    b, a = state["entries"]["b.md"]["url"], state["entries"]["a.md"]["url"]
+    equal(["#{b}#heading", "#{a}#self", "#{b}#two-words", "https://example.org/a.md", "mailto:a@example.org"], content.last)
   end
+end
+
+test("headings get GitHub-style named anchors") do
+  html = Sync::Markdown.new("## 2. Upstream job R: the company's record\n\n## Notes\n\n## Notes\n").render({})
+  assert(html.include?('<a name="2-upstream-job-r-the-companys-record"></a>'), html)
+  assert(html.include?('<a name="notes"></a>') && html.include?('<a name="notes-1"></a>'), html)
 end
 
 test("interrupted updates resume without duplicate creation") do
