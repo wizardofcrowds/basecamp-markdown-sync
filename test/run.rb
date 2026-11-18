@@ -241,10 +241,18 @@ test("fragments are kept, queries warn; external links stay intact") do
   end
 end
 
-test("headings get GitHub-style named anchors") do
-  html = Sync::Markdown.new("## 2. Upstream job R: the company's record\n\n## Notes\n\n## Notes\n").render({})
-  assert(html.include?('<a name="2-upstream-job-r-the-companys-record"></a>'), html)
-  assert(html.include?('<a name="notes"></a>') && html.include?('<a name="notes-1"></a>'), html)
+test("app.basecamp.com create URLs are accepted; other hosts stop the run") do
+  repository do |root, state, cli|
+    document(root, "a.md")
+    url = "https://app.basecamp.com/1/buckets/2/documents/3"
+    cli.define_singleton_method(:create) { |*, **| { "id" => 3, "app_url" => url } }
+    publish(engine(root, state, cli), root, state)
+    equal(url, state["entries"]["a.md"]["url"])
+    document(root, "b.md")
+    cli.define_singleton_method(:create) { |*, **| { "id" => 4, "app_url" => "https://evil.example/documents/4" } }
+    raises(Sync::Error) { publish(engine(root, state, cli), root, state) }
+    equal("b.md", state["pending_create"])
+  end
 end
 
 test("interrupted updates resume without duplicate creation") do
@@ -354,6 +362,20 @@ rescue LoadError
 end
 
 if parser_available
+  test("headings get GitHub-style named anchors") do
+    html = Sync::Markdown.new("## 2. Upstream job R: the company's record\n\n## Notes\n\n## Notes\n\n" \
+                              "## Q&A -- \"quoted\" ... `code`\n").render({})
+    assert(html.include?('<a name="2-upstream-job-r-the-companys-record"></a>'), html)
+    assert(html.include?('<a name="notes"></a>') && html.include?('<a name="notes-1"></a>'), html)
+    assert(html.include?('<a name="qa----quoted--code"></a>'), html)
+  end
+
+  test("task lists render as text; other inputs are still rejected") do
+    html = Sync::Markdown.new("- [ ] todo\n- [x] done\n").render({})
+    assert(html.include?("\u2610 todo") && html.include?("\u2611 done") && !html.include?("<input"), html)
+    raises(Sync::Error) { Sync::Markdown.new('<input type="checkbox">') }
+  end
+
   test("real parser rewrites reference and inline links, preserving code") do
     document = Sync::Markdown.new("[B][ref]\n\n[ref]: b.md \"Title\"\n\n`[code](missing.md)`\n\n```md\n[x](missing.md)\n```\n\n[web](https://example.org)")
     links = []
@@ -426,8 +448,8 @@ if parser_available
     end
   end
 else
-  $skipped += 6
-  puts "SKIP 6 real Markdown parser integration tests: install kramdown and kramdown-parser-gfm"
+  $skipped += 8
+  puts "SKIP 8 real Markdown parser integration tests: install kramdown and kramdown-parser-gfm"
   if ARGV.include?("--require-parser")
     $failed += 1
     warn "FAIL required parser dependencies are missing"

@@ -12,7 +12,7 @@ require "uri"
 require "yaml"
 
 module BasecampMarkdownSync
-  VERSION = "0.3.0"
+  VERSION = "0.4.0"
   class Error < StandardError; end
 
   def self.command(args, root:, body: "")
@@ -158,10 +158,16 @@ module BasecampMarkdownSync
       end
     end
 
+    TYPOGRAPHIC_SOURCE = { ndash: "--", mdash: "---", hellip: "...", laquo: "<<", raquo: ">>",
+                           laquo_space: "<< ", raquo_space: " >>" }.freeze
+
     def heading_text(node)
       case node.type
       when :text, :codespan then node.value.to_s
       when :smart_quote then "'"
+      # Kramdown turns "--", "---" and "..." into symbols; slug the source text
+      # as GitHub does.
+      when :typographic_sym then TYPOGRAPHIC_SOURCE.fetch(node.value, "")
       when :entity then node.value.char.to_s
       else node.children.map { |child| heading_text(child) }.join
       end

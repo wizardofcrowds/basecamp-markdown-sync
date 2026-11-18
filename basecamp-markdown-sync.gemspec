@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name = "basecamp-markdown-sync"
-  spec.version = "0.3.0"
+  spec.version = "0.4.0"
   spec.summary = "Publish Git Markdown to Basecamp with rewritten links"
   spec.authors = ["Basecamp Markdown Sync contributors"]
   spec.required_ruby_version = ">= 3.1"

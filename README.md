@@ -44,7 +44,7 @@ To install the command on your PATH instead of running it from this directory:
 
 ```sh
 gem build basecamp-markdown-sync.gemspec
-gem install ./basecamp-markdown-sync-0.3.0.gem
+gem install ./basecamp-markdown-sync-0.4.0.gem
 basecamp-md-sync --help
 ```
 
@@ -85,7 +85,7 @@ Add `.basecamp-md-sync-state.json*` to the source repository's `.gitignore`. Aut
 ruby test/run.rb
 ```
 
-The standard-library runner tests CLI invocation, state persistence, link resolution, incremental updates, circular links, and recovery in temporary Git repositories using a fake Basecamp client. Six additional integration tests exercise the real Markdown parser when the gems are installed; otherwise they are explicitly reported as skipped. To require those tests (for example in CI):
+The standard-library runner tests CLI invocation, state persistence, link resolution, incremental updates, circular links, and recovery in temporary Git repositories using a fake Basecamp client. Eight additional integration tests exercise the real Markdown parser when the gems are installed; otherwise they are explicitly reported as skipped. To require those tests (for example in CI):
 
 ```sh
 ruby test/run.rb --require-parser
